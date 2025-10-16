@@ -51,7 +51,7 @@ const generatePolygonColor = (
   return hues[index];
 };
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "https://e2da2525-8e56-48da-94b7-6c04d3f64fe2-00-2utec47fablah.sisko.replit.dev";
 const ESRI_IMAGERY_URL =
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 
