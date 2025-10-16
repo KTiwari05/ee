@@ -8,7 +8,7 @@ export type Catalog = {
   }>;
 };
 
-const BASE = "http://localhost:8000";
+const BASE = "https://e2da2525-8e56-48da-94b7-6c04d3f64fe2-00-2utec47fablah.sisko.replit.dev";
 
 export async function fetchCatalog(): Promise<Catalog> {
   const res = await fetch(`${BASE}/api/catalog`);

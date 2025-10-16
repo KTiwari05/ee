@@ -42,7 +42,7 @@ type ActiveTile = {
 };
 
 /** ======= Constants ======= */
-const API_BASE = "http://localhost:8000";
+const API_BASE = "https://e2da2525-8e56-48da-94b7-6c04d3f64fe2-00-2utec47fablah.sisko.replit.dev";
 const COLORS = { base: "#0ea5e9", highlight: "#ffcc00", hover: "#38bdf8" };
 // Replace fragile Google base with solid Esri imagery overlay
 const ESRI_IMAGERY_URL =
