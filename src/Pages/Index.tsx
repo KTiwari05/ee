@@ -21,7 +21,7 @@ export default function Index() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/catalog");
+        const res = await fetch("https://e2da2525-8e56-48da-94b7-6c04d3f64fe2-00-2utec47fablah.sisko.replit.dev/api/catalog");
         if (res.ok) setCatalog(await res.json());
       } catch (err) {
         console.error("Catalog fetch failed:", err);
