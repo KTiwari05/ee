@@ -54,7 +54,7 @@ const ESRI_IMAGERY_URL =
 export default function MapView({ geojson, selectedId, onSelectFeature }: Props) {
   const mapRef = useRef<L.Map | null>(null);
   const layerMap = useRef<Map<string | number, L.Path>>(new Map());
-  const { BaseLayer } = LayersControl;
+  // const { BaseLayer } = LayersControl;
 
   // Satellite overlay state (2D base + satellite overlay on top)
   const satRef = useRef<L.TileLayer | null>(null);
