@@ -1,472 +1,346 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, GeoJSON, LayersControl, Pane } from "react-leaflet";
+import { useEffect, useRef, useMemo, useState } from "react";
+import { MapContainer, TileLayer, GeoJSON, Pane } from "react-leaflet";
 import L from "leaflet";
-import ReactDOMServer from "react-dom/server";
 import "leaflet/dist/leaflet.css";
-import PopupContent from "./PopupContent";
+import { X, Info, Layers } from "lucide-react";
 
-
-/** ======= Types ======= */
 interface FeatureProperties {
   id: string | number;
   name: string;
   [key: string]: any;
 }
+
 interface GeoJSONFeature {
   type: "Feature";
   properties: FeatureProperties;
   geometry: any;
 }
+
 interface Props {
   geojson: { type: "FeatureCollection"; features: GeoJSONFeature[] } | null;
   selectedId: string | number | null;
   onSelectFeature?: (id: string | number | null) => void;
+  activeLayerKey?: string | null;
+  catalog?: any;
 }
-type Catalog = {
-  [category: string]: Array<{
-    id: string;
-    title: string;
-    collection: string;
-    variants: Array<{ id: string; label: string; vis?: any }>;
-    legend?: Array<{ color: string; label: string }>;
-  }>;
-};
-type ActiveTile = {
-  layer: L.TileLayer;
-  opacity: number;
-  category: string;
-  layerId: string;
-  layerTitle: string;
-  variantId: string;
-  variantLabel: string;
+
+// --------- Color helpers ----------
+const generatePolygonColor = (
+  layerKey: string | null,
+  featureId: string | number
+): string => {
+  if (!layerKey) return "rgba(218, 165, 32, 0.7)"; // dark yellow default
+
+  const combined = `${layerKey}:${featureId}`;
+  let hash = 0;
+  for (let i = 0; i < combined.length; i++) {
+    const char = combined.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash = hash & hash;
+  }
+
+  const hues = [
+    "rgba(218, 165, 32, 0.7)",  // Dark yellow
+    "rgba(210, 180, 140, 0.7)", // Tan
+    "rgba(184, 134, 11, 0.7)",  // Dark goldenrod
+    "rgba(204, 153, 0, 0.7)",   // Deep gold
+    "rgba(188, 143, 143, 0.7)", // Rosy brown
+    "rgba(169, 132, 94, 0.7)",  // Brown
+  ];
+  const index = Math.abs(hash) % hues.length;
+  return hues[index];
 };
 
-/** ======= Constants ======= */
-const API_BASE = "https://e2da2525-8e56-48da-94b7-6c04d3f64fe2-00-2utec47fablah.sisko.replit.dev";
-const COLORS = { base: "#0ea5e9", highlight: "#ffcc00", hover: "#38bdf8" };
-// Replace fragile Google base with solid Esri imagery overlay
+const API_BASE = "http://localhost:8000";
 const ESRI_IMAGERY_URL =
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 
-/** ============================================================================
- *  MapView
- *  ==========================================================================*/
-export default function MapView({ geojson, selectedId, onSelectFeature }: Props) {
+export default function MapView({
+  geojson,
+  selectedId,
+  onSelectFeature,
+  activeLayerKey,
+  catalog = {},
+}: Props) {
   const mapRef = useRef<L.Map | null>(null);
   const layerMap = useRef<Map<string | number, L.Path>>(new Map());
-  // const { BaseLayer } = LayersControl;
+  const overlayRef = useRef<L.TileLayer | null>(null);
 
-  // Satellite overlay state (2D base + satellite overlay on top)
-  const satRef = useRef<L.TileLayer | null>(null);
-  const [satOn, setSatOn] = useState(false);
-  const [satOpacity, setSatOpacity] = useState(0.6);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hoveredId, setHoveredId] = useState<string | number | null>(null);
 
-  // Catalog + active overlay state
-  const [catalog, setCatalog] = useState<Catalog>({});
-  const [active, setActive] = useState<Record<string, ActiveTile>>({}); // key = `${layerId}:${variantId}`
+  // hover popup state
+  const [popupContent, setPopupContent] = useState<FeatureProperties | null>(null);
+  const [popupPosition, setPopupPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const rafMove = useRef<number | null>(null);
 
-  // ---- fetch catalog from backend ----
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/catalog`);
-        if (!res.ok) throw new Error("Catalog fetch failed");
-        const data: Catalog = await res.json();
-        setCatalog(data);
-      } catch (e) {
-        console.error(e);
-      }
-    })();
-  }, []);
-  const catalogEntries = useMemo(
-    () => Object.entries(catalog) as Array<[string, Catalog[string]]>,
-    [catalog]
-  );
-
-  // ---- feature styling + handlers (unchanged interaction) ----
   const getStyle = (featureId?: string | number): L.PathOptions => {
     const isSelected = featureId === selectedId;
+    const isHovered = featureId === hoveredId;
+    const baseColor = featureId
+      ? generatePolygonColor(activeLayerKey ?? null, featureId)
+      : "rgba(218, 165, 32, 0.7)";
+
     return {
-      color: isSelected ? COLORS.highlight : COLORS.base,
-      weight: isSelected ? 3.5 : 2,
-      fillColor: isSelected ? COLORS.highlight : COLORS.base,
-      fillOpacity: isSelected ? 0.5 : 0.2,
+      color: isSelected ? "rgba(168, 85, 247, 0.95)" : baseColor,
+      weight: isSelected ? 4 : isHovered ? 3 : 2.5,
+      fillColor: isSelected ? "rgba(168, 85, 247, 0.95)" : baseColor,
+      fillOpacity: isSelected ? 0.65 : isHovered ? 0.5 : 0.4,
     };
   };
 
+  // feature interactivity
   const onEachFeature = (feature: GeoJSONFeature, layer: L.Layer) => {
-    const featureId = feature.properties.id;
+    const featureId = String(feature.properties.id);
     const polygonLayer = layer as L.Path;
     layerMap.current.set(featureId, polygonLayer);
 
-    polygonLayer.bindPopup(
-      ReactDOMServer.renderToString(<PopupContent properties={feature.properties} />)
-    );
-
     polygonLayer.on({
-      mouseover: (e) => {
-        if (featureId !== selectedId) {
-          e.target.setStyle({ color: COLORS.hover, fillColor: COLORS.hover });
-        }
+      mouseover: (e: L.LeafletMouseEvent) => {
+        setHoveredId(featureId);
+        // show popup on hover
+        updatePopupFromEvent(e, feature.properties);
+        polygonLayer.setStyle(getStyle(featureId));
         polygonLayer.bringToFront();
       },
-      mouseout: () => polygonLayer.setStyle(getStyle(featureId)),
+      mousemove: (e: L.LeafletMouseEvent) => {
+        // keep popup following cursor, throttled with rAF
+        if (rafMove.current) cancelAnimationFrame(rafMove.current);
+        rafMove.current = requestAnimationFrame(() => {
+          updatePopupFromEvent(e, feature.properties);
+        });
+      },
+      mouseout: () => {
+        setHoveredId(null);
+        setPopupContent(null);
+        polygonLayer.setStyle(getStyle(featureId));
+      },
       click: () => {
+        // click only selects (keeps hover-only info behavior)
         onSelectFeature?.(featureId);
-        mapRef.current?.closePopup();
       },
     });
   };
 
-  // ---- initial zoom to first feature ----
+  const updatePopupFromEvent = (e: L.LeafletMouseEvent, props: FeatureProperties) => {
+    const point = mapRef.current?.latLngToContainerPoint(e.latlng);
+    if (!point) return;
+    setPopupContent(props);
+    setPopupPosition({ x: point.x + 18, y: point.y - 18 }); // slight offset
+  };
+
+  // initial zoom to dataset
   useEffect(() => {
     const map = mapRef.current;
     if (!geojson || !map || geojson.features.length === 0) return;
-    const firstFeature = geojson.features[0];
-    const bounds = L.geoJSON(firstFeature).getBounds();
+    const bounds = L.geoJSON(geojson).getBounds();
     if (bounds.isValid()) map.fitBounds(bounds, { padding: [100, 100] });
   }, [geojson]);
 
-  // ---- cinematic fly-to on selection ----
+  // smooth transition on selection
   useEffect(() => {
     const map = mapRef.current;
-    if (!selectedId || !map) return;
+    if (!map || !selectedId) return;
 
-    layerMap.current.forEach((layer, id) => layer.setStyle(getStyle(id)));
-    const targetLayer = layerMap.current.get(selectedId);
-
-    if (targetLayer) {
-      targetLayer.bringToFront();
-      const bounds = (targetLayer as any).getBounds?.();
-      if (bounds) {
-        map.flyToBounds(bounds, { padding: [120, 120], duration: 3, easeLinearity: 0.2 });
-      }
-    }
-  }, [selectedId]);
-
-  /** ===================== EE TILE MANAGEMENT ===================== */
-
-  // Toggle an overlay variant on/off and ensure it renders above basemap.
-  const toggleVariant = async (
-    category: string,
-    layerId: string,
-    layerTitle: string,
-    variantId: string,
-    variantLabel: string
-  ) => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const key = `${layerId}:${variantId}`;
-    const existing = active[key];
-
-    if (existing) {
-      map.removeLayer(existing.layer);
-      const copy = { ...active };
-      delete copy[key];
-      setActive(copy);
-      return;
-    }
-
-    try {
-      const res = await fetch(`${API_BASE}/api/tile/${layerId}/${variantId}`);
-      if (!res.ok) throw new Error(await res.text());
-      const { url } = await res.json();
-
-      // Ensure overlays render BETWEEN base tiles and vectors
-      const tile = L.tileLayer(url, { opacity: 0.6, pane: "overlayTiles", zIndex: 650 }).addTo(map);
-
-      setActive(prev => ({
-        ...prev,
-        [key]: {
-          layer: tile,
-          opacity: 0.7,
-          category,
-          layerId,
-          layerTitle,
-          variantId,
-          variantLabel,
-        },
-      }));
-    } catch (err) {
-      console.error("Tile fetch failed:", err);
-    }
-  };
-
-  const setVariantOpacity = (key: string, value: number) => {
-    const entry = active[key];
-    if (!entry) return;
-    entry.layer.setOpacity(value);
-    setActive(prev => ({ ...prev, [key]: { ...entry, opacity: value } }));
-  };
-
-  // dynamic legend: show legend for any layer that has one and is active
-  const legendSections = useMemo(() => {
-    const activeByLayer: Record<string, { title: string; variants: string[]; category: string }> = {};
-    Object.entries(active).forEach(([_, info]) => {
-      if (!activeByLayer[info.layerId]) {
-        activeByLayer[info.layerId] = { title: info.layerTitle, variants: [], category: info.category };
-      }
-      activeByLayer[info.layerId].variants.push(info.variantLabel);
+    // reset styles
+    layerMap.current.forEach((layer, id) => {
+      layer.setStyle(getStyle(id));
     });
 
-    const sections: Array<{ title: string; items: Array<{ color: string; label: string }> }> = [];
-    for (const [, layers] of catalogEntries) {
-      layers.forEach(layer => {
-        if (activeByLayer[layer.id]) {
-          if (layer.legend && layer.legend.length) {
-            sections.push({ title: layer.title, items: layer.legend });
-          } else {
-            const items = activeByLayer[layer.id].variants.map(v => ({ color: "#888", label: v }));
-            sections.push({ title: layer.title, items });
-          }
-        }
+    const targetLayer = layerMap.current.get(String(selectedId));
+    if (!targetLayer) return;
+
+    const bounds = (targetLayer as any).getBounds?.();
+    if (bounds && bounds.isValid()) {
+      map.flyToBounds(bounds, {
+        padding: [140, 140],
+        duration: 2.5,
+        easeLinearity: 0.15,
       });
     }
-    return sections;
-  }, [active, catalogEntries]);
 
-  // Satellite overlay toggle/opacity
-  const toggleSatellite = () => {
+    // brief glow
+    (targetLayer as any).setStyle({
+      weight: 5,
+      color: "rgba(168, 85, 247, 0.95)",
+      fillOpacity: 0.7,
+    });
+    const t = setTimeout(() => {
+      (targetLayer as any).setStyle(getStyle(selectedId));
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [selectedId]);
+
+  // overlay tiles
+  useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (satOn) {
-      if (satRef.current) map.removeLayer(satRef.current);
-      satRef.current = null;
-      setSatOn(false);
-      return;
-    }
-    // ensure pane exists
+
     if (!map.getPane("overlayTiles")) {
       map.createPane("overlayTiles");
-      map.getPane("overlayTiles")!.style.zIndex = "350"; // below vectors (overlayPane=400), above basemap
+      map.getPane("overlayTiles")!.style.zIndex = "650";
+      map.getPane("overlayTiles")!.style.mixBlendMode = "multiply"; // good contrast
     }
-    const t = L.tileLayer(ESRI_IMAGERY_URL, { pane: "overlayTiles", opacity: satOpacity }).addTo(map);
-    satRef.current = t;
-    setSatOn(true);
-  };
 
-  const setSatelliteOpacity = (val: number) => {
-    setSatOpacity(val);
-    if (satRef.current) satRef.current.setOpacity(val);
-  };
+    if (overlayRef.current) {
+      map.removeLayer(overlayRef.current);
+      overlayRef.current = null;
+    }
 
-  /** ===================== RENDER ===================== */
+    if (!activeLayerKey) return;
+
+    setIsLoading(true);
+    (async () => {
+      try {
+        const [, layerId, variantId] = activeLayerKey.split("|");
+        const res = await fetch(`${API_BASE}/api/tile/${layerId}/${variantId}`);
+        if (!res.ok) throw new Error(`Tile fetch failed: ${res.statusText}`);
+        const { url } = await res.json();
+
+        const tile = L.tileLayer(url, { opacity: 0.7, pane: "overlayTiles" });
+        tile.addTo(map);
+        overlayRef.current = tile;
+      } catch (err) {
+        console.error("Error loading overlay:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    })();
+  }, [activeLayerKey]);
+
+  // legend
+  const legend = useMemo(() => {
+    if (!activeLayerKey || !catalog) return null;
+    const [, layerId] = activeLayerKey.split("|");
+    for (const category in catalog) {
+      const foundLayer = catalog[category]?.find(
+        (layer: any) => layer.id === layerId
+      );
+      if (foundLayer?.legend && foundLayer.legend.length > 0)
+        return foundLayer.legend;
+    }
+    return null;
+  }, [activeLayerKey, catalog]);
+
   return (
-    <div className="w-full h-full relative bg-[#F5F5F5] dark:bg-[#1E1E1E] overflow-hidden">
-      <div className="flex w-full h-full">
-        {/* ===== Left Layer Panel with improved UI ===== */}
-        <div className="w-80 bg-[#FAFAFA] dark:bg-[#2A2A2A] backdrop-blur border-r border-[#E0E0E0] dark:border-[#3A3A3A] overflow-y-auto">
-          <div className="px-4 py-3 text-sm font-semibold bg-gradient-to-r from-[#6B4F2A] to-[#8B6A3A] text-[#FAFAFA]">
-            Layers
-          </div>
+    <div className="relative w-full h-full bg-slate-950">
+      <MapContainer
+        ref={mapRef as any}
+        center={[20.59, 78.96]}
+        zoom={4}
+        className="w-full h-full"
+        scrollWheelZoom={true}
+      >
+        <Pane name="basemapPane" style={{ zIndex: 200 }} />
+        <Pane name="overlayTiles" style={{ zIndex: 650 }} />
+        <Pane name="featuresPane" style={{ zIndex: 1000 }} />
 
-          {/* Basemap overlays (2D base + satellite overlay on top) */}
-          <div className="px-4 pb-4 pt-3 border-b border-[#E0E0E0] dark:border-[#3A3A3A]">
-            <div className="text-[10px] uppercase tracking-wider text-[#6B6B6B] dark:text-[#A0A0A0] mb-2">
-              Basemap
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <label className="flex items-center gap-2 text-sm text-[#4A4A4A] dark:text-[#D0D0D0]">
-                <input
-                  type="checkbox"
-                  className="accent-[#6B4F2A]"
-                  checked={satOn}
-                  onChange={toggleSatellite}
-                />
-                <span>Satellite imagery</span>
-              </label>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={satOn ? satOpacity : 0}
-                onChange={(e) => setSatelliteOpacity(parseFloat(e.target.value))}
-                className="w-28 accent-[#6B4F2A] disabled:opacity-40"
-                disabled={!satOn}
-                title="Opacity"
-              />
-            </div>
-          </div>
+        <TileLayer
+          url={ESRI_IMAGERY_URL}
+          attribution="Tiles © Esri, Maxar, Earthstar Geographics"
+          pane="basemapPane"
+        />
 
-          {/* Catalog */}
-          {catalogEntries.length === 0 && (
-            <div className="px-4 py-3 text-xs text-[#6B6B6B] dark:text-[#A0A0A0]">Loading catalog…</div>
-          )}
-          {catalogEntries.map(([category, layers]) => (
-            <div key={category} className="px-4 pb-4 pt-3">
-              <div className="text-[10px] uppercase tracking-wider text-[#6B6B6B] dark:text-[#A0A0A0] mb-2">
-                {category}
-              </div>
-              {layers.map(layer => (
-                <div key={layer.id} className="mb-3">
-                  <div className="font-medium text-[#4A4A4A] dark:text-[#D0D0D0] mb-1">{layer.title}</div>
-                  {layer.variants.map(variant => {
-                    const key = `${layer.id}:${variant.id}`;
-                    const isOn = !!active[key];
-                    return (
-                      <div key={variant.id} className="flex items-center justify-between gap-3 py-1">
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            className="accent-[#6B4F2A]"
-                            checked={isOn}
-                            onChange={() =>
-                              toggleVariant(category, layer.id, layer.title, variant.id, variant.label)
-                            }
-                          />
-                          <span>{variant.label}</span>
-                        </label>
-                        <input
-                          type="range"
-                          min={0}
-                          max={0.85}
-                          step={0.05}
-                          value={active[key]?.opacity ?? 0}
-                          onChange={e => setVariantOpacity(key, parseFloat(e.target.value))}
-                          className="w-28 accent-[#6B4F2A] disabled:opacity-40"
-                          disabled={!isOn}
-                          title="Opacity"
-                        />
-                      </div>
-                    );
-                  })}
+        {geojson && (
+          <GeoJSON
+            key="geojson-layer"
+            data={geojson}
+            pane="featuresPane"
+            style={(feature) => getStyle(feature?.properties.id)}
+            onEachFeature={onEachFeature}
+          />
+        )}
+      </MapContainer>
+
+      {/* Legend */}
+      {legend && (
+        <div className="absolute top-8 right-8 z-[2000]">
+          <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-300 dark:border-slate-700 shadow-2xl rounded-2xl p-5 w-80 transition-all duration-300">
+            <div className="flex items-center gap-2 mb-3">
+              <Layers className="w-5 h-5 text-purple-500" />
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100">
+                Legend
+              </h3>
+            </div>
+            <div className="h-px bg-slate-200 dark:bg-slate-700 mb-3" />
+            <div className="space-y-2 max-h-96 overflow-y-auto pr-1 custom-scrollbar">
+              {legend.map((item: any, idx: number) => (
+                <div
+                  key={idx}
+                  className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition-colors"
+                >
+                  <span
+                    className="w-5 h-5 rounded-md border border-slate-300 dark:border-slate-600 flex-shrink-0"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span className="text-sm text-slate-800 dark:text-slate-200 truncate">
+                    {item.label}
+                  </span>
                 </div>
               ))}
             </div>
-          ))}
+          </div>
+        </div>
+      )}
 
-          {/* Active chips */}
-          {Object.keys(active).length > 0 && (
-            <div className="px-4 pb-4">
-              <div className="text-[10px] uppercase tracking-wider text-[#6B6B6B] dark:text-[#A0A0A0] mb-2">
-                Active
+      {/* Loading chip */}
+      {isLoading && (
+        <div className="absolute top-8 left-8 z-[2000] flex items-center gap-3 bg-white/90 dark:bg-slate-800/90 text-slate-800 dark:text-slate-200 backdrop-blur-md px-4 py-3 rounded-xl shadow-lg">
+          <div className="relative w-4 h-4">
+            <div className="absolute inset-0 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 animate-spin" />
+            <div className="absolute inset-1 rounded-full bg-white dark:bg-slate-800" />
+          </div>
+          <span className="text-sm font-medium">Loading overlay...</span>
+        </div>
+      )}
+
+      {/* Hover Info Popup */}
+      {popupContent && (
+        <div
+          className="absolute z-[2100] pointer-events-none animate-[fadeIn_0.15s_ease-out]"
+          style={{ left: `${popupPosition.x}px`, top: `${popupPosition.y}px` }}
+        >
+          <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200 dark:border-slate-700 shadow-2xl rounded-xl p-4 w-80 max-h-96 overflow-y-auto custom-scrollbar">
+            <div className="flex items-start justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Info className="w-5 h-5 text-purple-500" />
+                <h4 className="font-semibold text-slate-900 dark:text-slate-100">
+                  {popupContent.name}
+                </h4>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {Object.entries(active).map(([key, entry]) => (
-                  <button
-                    key={key}
-                    onClick={() =>
-                      toggleVariant(entry.category, entry.layerId, entry.layerTitle, entry.variantId, entry.variantLabel)
-                    }
-                    className="text-xs px-2 py-1 rounded bg-[#E0E0E0] text-[#4A4A4A] dark:bg-[#3A3A3A] dark:text-[#D0D0D0] hover:bg-[#FFCCCC] hover:text-[#FF0000] transition"
-                    title="Click to remove"
-                  >
-                    {entry.variantLabel}
-                  </button>
+              {/* close is disabled for hover popup to keep pointer-events none;
+                  kept for parity but hidden */}
+              <button className="hidden p-1 rounded-lg">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="h-px bg-slate-200 dark:bg-slate-700 mb-3" />
+            <div className="space-y-2">
+              {Object.entries(popupContent)
+                .filter(([k]) => k !== "id" && k !== "name")
+                .map(([k, v]) => (
+                  <div key={k} className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800/50">
+                    <p className="text-[10px] font-semibold tracking-wider uppercase text-purple-600 dark:text-purple-300 mb-0.5">
+                      {k}
+                    </p>
+                    <p className="text-sm text-slate-800 dark:text-slate-200 break-words">
+                      {String(v).length > 160 ? String(v).slice(0, 160) + "…" : String(v)}
+                    </p>
+                  </div>
                 ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ===== Map Area ===== */}
-        <div className="relative flex-1">
-          <MapContainer
-              ref={mapRef}
-              center={[20.59, 78.96]}
-              zoom={4}
-              className="w-full h-full"
-              scrollWheelZoom={true}
-            >
-              <Pane name="basemapPane" style={{ zIndex: 200 }} />
-              <Pane
-                name="overlayTiles"
-                style={{
-                  zIndex: 650,
-                  mixBlendMode: "screen", // prevents “dark stacking” of multiple overlays
-                }}
-              />
-              <Pane name="featuresPane" style={{ zIndex: 1000 }} />
-
-              {/* Ensure panes exist BEFORE any layer mounts */}
-              {/* <Pane name="basemapPane" style={{ zIndex: 200 }} />
-              <Pane name="overlayTiles" style={{ zIndex: 650 }} /> */}
-
-              <LayersControl position="topright">
-                {/* Satellite (no key) */}
-                <LayersControl.BaseLayer checked name="Esri World Imagery (Satellite)">
-                  <TileLayer
-                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                    attribution="Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
-                    pane="basemapPane"
-                    zIndex={200}
-                  />
-                </LayersControl.BaseLayer>
-
-                {/* Black & White option (no key) */}
-                <LayersControl.BaseLayer name="Stamen Toner Lite (B/W)">
-                  <TileLayer
-                    url="https://stamen-tiles.a.ssl.fastly.net/toner-lite/{z}/{x}/{y}.png"
-                    attribution='Map tiles by <a href="http://stamen.com">Stamen Design</a>, CC BY 3.0 — Map data &copy; OpenStreetMap contributors'
-                    pane="basemapPane"
-                    zIndex={200}
-                  />
-                </LayersControl.BaseLayer>
-
-                {/* If you still want OSM color as a third option */}
-                <LayersControl.BaseLayer name="OpenStreetMap">
-                  <TileLayer
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    attribution="&copy; OpenStreetMap contributors"
-                    pane="basemapPane"
-                    zIndex={200}
-                  />
-                </LayersControl.BaseLayer>
-              </LayersControl>
-
-              {geojson && (
-                <GeoJSON
-                  key="geojson-layer"
-                  data={geojson}
-                  pane="featuresPane"                      // <<< put polygons above all tiles
-                  style={(feature) => getStyle(feature?.properties.id)}
-                  onEachFeature={onEachFeature}
-                />
-              )}
-
-            </MapContainer>
-
-
-
-          {/* ===== Legend Panel (top-right) ===== */}
-          {/* Renders only when something is active & present in catalog */}
-          {legendSections.length > 0 && (
-            <div className="absolute top-4 right-4 z-[1000] bg-white/95 dark:bg-slate-900/95 rounded-lg border border-slate-200 dark:border-slate-800 shadow p-3 w-80">
-              <div className="text-sm font-semibold mb-2">Legend</div>
-              {legendSections.map((sec, i) => (
-                <div key={i} className="mb-3">
-                  <div className="text-sm font-medium mb-1">{sec.title}</div>
-                  {sec.items.map((it, j) => (
-                    <div key={j} className="flex items-center gap-2 text-sm mb-1">
-                      <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: it.color }} />
-                      <span>{it.label}</span>
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* ===== Base Feature Legend (bottom-left) ===== */}
-          <div className="absolute bottom-6 left-6 z-[400] bg-[#FAFAFA]/95 dark:bg-[#2A2A2A]/95 rounded-xl border border-[#E0E0E0] dark:border-[#3A3A3A] shadow-md p-3 max-w-xs">
-            <div className="text-xs font-medium text-[#6B6B6B] dark:text-[#A0A0A0] mb-2">Map Legend</div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: COLORS.base }} />
-              <span className="text-sm text-[#4A4A4A] dark:text-[#D0D0D0]">Default Feature</span>
-            </div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: COLORS.highlight }} />
-              <span className="text-sm text-[#4A4A4A] dark:text-[#D0D0D0]">Selected Feature</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: COLORS.hover }} />
-              <span className="text-sm text-[#4A4A4A] dark:text-[#D0D0D0]">Hovered Feature</span>
             </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* local animations + scrollbar styling */}
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(71, 85, 105, 0.4); border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 0.6); }
+      `}</style>
     </div>
   );
 }

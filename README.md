@@ -36,31 +36,31 @@ Envirozone is a React-based web application designed to visualize GeoJSON data o
 ## UI Components
 
 ### 1. **Header**
-   - Displays the total number of features.
-   - Includes a search bar for filtering features.
-   - Props:
-     - `featureCount`: Total number of features.
-     - `filterTerm`: Current search term.
-     - `onFilterChange`: Callback to update the search term.
+   - **Functionality**: Displays the total number of features available in the uploaded GeoJSON file. Includes a search bar that allows users to filter the feature list dynamically.
+   - **Placement**: Positioned at the top of the application as a fixed header.
+   - **Working**:
+     - The `featureCount` prop dynamically updates to reflect the total number of features.
+     - The `filterTerm` prop binds to the search bar input, enabling real-time filtering.
+     - The `onFilterChange` callback is triggered whenever the search term changes, updating the filtered feature list in the sidebar.
 
 ### 2. **Sidebar**
-   - Lists all features extracted from the GeoJSON file.
-   - Highlights the currently selected feature.
-   - Allows users to upload a new GeoJSON file.
-   - Props:
-     - `features`: Array of filtered features.
-     - `selectedId`: ID of the currently selected feature.
-     - `onSelect`: Callback to update the selected feature.
-     - `onFileLoad`: Callback to handle GeoJSON file upload.
-     - `totalFeatures`: Total number of features.
+   - **Functionality**: Displays a scrollable list of features extracted from the GeoJSON file. Allows users to upload a new GeoJSON file and select features from the list.
+   - **Placement**: Positioned on the left side of the application as a collapsible sidebar.
+   - **Working**:
+     - The `features` prop provides the filtered list of features to display.
+     - The `selectedId` prop highlights the currently selected feature in the list.
+     - The `onSelect` callback is triggered when a user clicks on a feature, updating the selected feature in the state.
+     - The `onFileLoad` callback handles the GeoJSON file upload, validating and normalizing the data before updating the state.
+     - The `totalFeatures` prop displays the total number of features at the top of the sidebar.
 
 ### 3. **MapView**
-   - Renders the GeoJSON data on an interactive map.
-   - Highlights the selected feature.
-   - Props:
-     - `geojson`: Normalized GeoJSON data.
-     - `selectedId`: ID of the currently selected feature.
-     - `onSelectFeature`: Callback to update the selected feature.
+   - **Functionality**: Renders the GeoJSON data on an interactive map. Highlights the selected feature and allows users to interact with map elements.
+   - **Placement**: Occupies the main content area of the application, to the right of the sidebar.
+   - **Working**:
+     - The `geojson` prop provides the normalized GeoJSON data to render on the map.
+     - The `selectedId` prop highlights the currently selected feature on the map.
+     - The `onSelectFeature` callback is triggered when a user clicks on a map element, updating the selected feature in the state.
+     - The map supports zooming, panning, and clicking on features for better interactivity.
 
 ---
 

@@ -1,25 +1,22 @@
 import { useState, useMemo, useEffect } from "react";
-import MapView from "./components/MapView";
-import Sidebar from "./components/Sidebar";
-import Header from "./components/Header";
-import { normalizeGeoJSON, extractFeatureList } from "./utils/geojsonHelpers";
+import MapView from "../components/MapView";
+import Sidebar from "../components/Sidebar";
+import Header from "../components/Header";
+import { normalizeGeoJSON, extractFeatureList, norm } from "../utils/geojsonHelpers";
 
 type FeatureListItem = {
   id: string | number;
   name: string;
 };
 
-// 🔧 Utility to normalize IDs across the app
-const norm = (v: unknown) => (v === null || v === undefined ? "" : String(v));
-
-export default function App() {
+export default function Index() {
   const [geojson, setGeojson] = useState<any | null>(null);
   const [featureList, setFeatureList] = useState<FeatureListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | number | null>(null);
   const [activeLayerKey, setActiveLayerKey] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<any>({});
   const [filterTerm, setFilterTerm] = useState("");
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Added state for sidebar
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -44,6 +41,7 @@ export default function App() {
     setFeatureList(features);
     setFilterTerm("");
     setSelectedId(features.length ? norm(features[0].id) : null);
+    setIsSidebarOpen(false); // Close sidebar on mobile after upload
   };
 
   const filteredFeatures = useMemo(() => {
@@ -56,12 +54,12 @@ export default function App() {
   }, [featureList, filterTerm]);
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-gradient-to-br from-blue-50 to-cyan-100 dark:from-slate-800 dark:to-slate-900">
+    <div className="w-screen h-screen flex flex-col bg-background">
       <Header
         featureCount={featureList.length}
         filterTerm={filterTerm}
         onFilterChange={setFilterTerm}
-        onToggleSidebar={() => setIsSidebarOpen(true)} // Added missing prop
+        onToggleSidebar={() => setIsSidebarOpen(true)}
       />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
@@ -72,10 +70,10 @@ export default function App() {
           totalFeatures={featureList.length}
           catalog={catalog}
           onLayerChange={setActiveLayerKey}
-          isOpen={isSidebarOpen} // Added missing prop
-          onClose={() => setIsSidebarOpen(false)} // Added missing prop
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
         />
-        <main className="flex-1">
+        <main className="flex-1 relative">
           <MapView
             geojson={geojson}
             selectedId={norm(selectedId)}
